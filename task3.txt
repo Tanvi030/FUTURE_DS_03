@@ -1,0 +1,285 @@
+Nice — I’ll give you a clear, **practical step-by-step guide** to *clean and prepare* Google Forms feedback CSVs. I’ll cover three common workflows so you can pick the one you prefer: **Excel / Google Sheets**, **Power Query (Excel / Power BI)**, and **Python (pandas)**. Each section contains exact clicks/formulas or ready-to-copy code and common pitfalls + checks.
+
+# Quick checklist (order to follow)
+
+1. Import the CSV with correct encoding/delimiter.
+2. Convert to a Table (Excel) / structured frame.
+3. Drop completely empty rows & obvious metadata rows.
+4. Standardize column names and types (date → Date, rating → Number).
+5. Trim & clean text fields (remove extra spaces, non-printables).
+6. Remove duplicates (decide by e-mail + timestamp or full row).
+7. Normalize ratings (map Likert text → numeric).
+8. Standardize event names / categories using a mapping.
+9. Create derived columns (feedback length, word count, date parts).
+10. Remove or anonymize PII (emails, phone numbers) if needed.
+11. Validate (counts, min/max rating, nulls).
+12. Save/export cleaned dataset.
+
+---
+
+# A. Excel / Google Sheets — step-by-step (best for non-coders)
+
+**1) Import cleanly**
+
+* Excel: Data → Get Data → From File → From Text/CSV → select correct **File Origin (UTF-8)** and **Delimiter (Comma)** → Load to table.
+* Google Sheets: File → Import → Upload → Detect delimiter.
+
+**2) Convert to a table (Excel)**
+
+* Select the range → Ctrl+T → check “My table has headers”. This enables structured references and easier Remove Duplicates.
+
+**3) Remove metadata & blank rows**
+
+* Filter each column: filter out rows where essential fields (e.g., rating or feedback) are blank. Delete those rows.
+
+**4) Remove duplicates**
+
+* Data → Remove Duplicates → choose identifying columns (email + timestamp or whole row). Confirm.
+
+**5) Trim & Clean text (Excel formulas)**
+
+* If column B has “Feedback”, in a helper column use:
+
+```
+=TRIM(CLEAN(B2))
+```
+
+* Drag down, then Copy → Paste Special → Values over original column.
+* **Troubleshooting**: If you used the structured reference `=TRIM(CLEAN([@[Customer Name]]))` and get `#REF!`, that usually means either:
+
+  * The data isn't a Table (convert with Ctrl+T), or
+  * The column header name doesn't match exactly (check spelling/extra spaces).
+
+**6) Standardize ratings (text → numeric)**
+
+* Create a mapping table (e.g., columns F\:G) where F has raw values like “Strongly agree”, “Agree”, etc., and G has numbers 5,4,3...
+* Use XLOOKUP (Excel 365/2021):
+
+```
+=XLOOKUP( B2, $F$2:$F$10, $G$2:$G$10, B2 )
+```
+
+* Or VLOOKUP with IFNA fallback:
+
+```
+=IFNA(VLOOKUP(B2,$F$2:$G$10,2,FALSE), VALUE(B2))
+```
+
+* Copy → Paste Values.
+
+**7) Standardize event names**
+
+* Use a similar mapping table and XLOOKUP to replace messy names with canonical ones (e.g., “AI workshop”, “AI Workshop 2025” → “AI Workshop”).
+
+**8) Parse dates**
+
+* If Excel imported date as text, use Data → Text to Columns (Delimited) OR formula:
+
+```
+=DATEVALUE(A2)  -- then Format Cells → Date
+```
+
+* For inconsistent formats, use DATE, MID, LEFT, RIGHT combination or clean before.
+
+**9) Add derived columns**
+
+* Character count: `=LEN(TRIM(C2))`
+* Word count: `=IF(LEN(TRIM(C2))=0,0, LEN(TRIM(C2)) - LEN(SUBSTITUTE(TRIM(C2)," ","")) + 1)`
+* Feedback short flag: `=IF(LEN(TRIM(C2))<20,"short","long")`
+
+**10) Anonymize PII (if required)**
+
+* Replace e-mails: Use Find & Replace with pattern? Excel doesn’t support regex natively—use helper column with formula to hide:
+
+```
+=LEFT(E2,1) & "****@" & RIGHT(E2,LEN(E2)-FIND("@",E2))
+```
+
+(Or remove column entirely.)
+
+**11) Final checks & Save**
+
+* Sort rating column: check min/max.
+* Pivot: count ratings per event to ensure distribution is expected.
+* Save as Excel and Export CSV (File → Save As → CSV UTF-8).
+
+---
+
+# B. Power Query (recommended when data refreshes / large datasets)
+
+Power Query (Excel / Power BI) is excellent because steps are reproducible.
+
+**1) Load**
+
+* Excel: Data → Get Data → From File → From Text/CSV → Transform Data.
+* Power BI: Home → Get Data → Text/CSV → Transform Data.
+
+**2) Typical Power Query cleaning steps (click order)**
+
+* `Home` → **Use First Row as Headers** (if needed).
+* `Transform` → **Detect Data Type** (or manually set column types: Date, Text, Whole Number).
+* Select text columns → `Transform` → **Format** → **Trim** → **Clean** → **Lowercase** (if you want).
+* Remove unwanted columns: select → right-click → **Remove Columns**.
+* Remove duplicates: `Home` → **Remove Rows** → **Remove Duplicates** (select columns to consider).
+* Replace values / standardize event names: select column → `Transform` → **Replace Values** OR use Merge with a mapping table (Home → Merge Queries).
+* Split combined columns (if any): `Transform` → **Split Column** by delimiter.
+* Fill down for repeated labels: `Transform` → **Fill** → **Down**.
+* Create derived columns: `Add Column` → **Custom Column** (example below).
+* Filter out nulls / invalid ratings.
+
+**3) Map text ratings to numeric (Custom Column example M)**
+In Add Column → Custom Column use something like:
+
+```m
+= if Text.Lower([Rating]) = "strongly agree" then 5
+  else if Text.Lower([Rating]) = "agree" then 4
+  else if Text.Lower([Rating]) = "neutral" then 3
+  else if Text.Lower([Rating]) = "disagree" then 2
+  else if Text.Lower([Rating]) = "strongly disagree" then 1
+  else try Number.From([Rating]) otherwise null
+```
+
+(You can also create a mapping table and Merge.)
+
+**4) Text cleaning for NLP in Power Query**
+
+* Lowercase + Trim + Clean.
+* To remove punctuation you can use `Transform` → `Replace Values` repeatedly or use a bit of M-code. For heavier NLP (tokenization/lemmatization) call Python/R script in Power BI or export cleaned text and process in Python.
+
+**5) Apply & Load**
+
+* When ready: `Home` → **Close & Load** (Excel) or **Close & Apply** (Power BI).
+
+**Power Query tips**
+
+* All transformations are recorded so refreshing a new CSV will repeat the steps automatically.
+* Use Merge with a small canonicalization table for event names — easier to maintain.
+
+---
+
+# C. Python (pandas) — reproducible, flexible; best for NLP prep
+
+Below is a compact script you can run in a Jupyter notebook or .py file. It covers import, cleaning, rating mapping, PII removal, basic text cleaning and feature engineering.
+
+```python
+import pandas as pd
+import re
+from html import unescape
+
+# 1. Load
+df = pd.read_csv("feedback.csv", encoding="utf-8")
+
+# 2. Normalize column names
+df.columns = df.columns.str.strip().str.lower().str.replace(r'\s+','_',regex=True)
+
+# 3. Drop completely empty rows
+df.dropna(how="all", inplace=True)
+
+# 4. Remove duplicates (by email + timestamp if available)
+if {'email','timestamp'}.issubset(df.columns):
+    df.drop_duplicates(subset=['email','timestamp'], inplace=True)
+else:
+    df.drop_duplicates(inplace=True)
+
+# 5. Helper: text cleaning function
+def clean_text(s):
+    if pd.isna(s): return ""
+    s = unescape(str(s))                  # HTML entities
+    s = re.sub(r'http\S+','',s)           # remove URLs
+    s = re.sub(r'\S+@\S+','',s)           # remove emails
+    s = re.sub(r'\+?\d[\d\-\s]{6,}','',s) # remove phone-like numbers
+    s = re.sub(r'[\r\n]+',' ',s)          # normalize newlines
+    s = re.sub(r'[^\w\s\.\,\!\?]',' ',s)  # remove many punct/emojis (adjust as needed)
+    s = re.sub(r'\s+',' ',s).strip()
+    return s.lower()
+
+# 6. Apply to feedback column
+df['feedback_clean'] = df['feedback'].apply(clean_text)
+
+# 7. Map textual ratings to numeric
+mapping = {
+  'strongly agree':5, 'agree':4, 'neutral':3, 'disagree':2, 'strongly disagree':1
+}
+df['rating_num'] = pd.to_numeric(df['rating'], errors='coerce')
+df['rating_num'] = df['rating_num'].fillna(df['rating'].map(mapping))
+
+# 8. Derived features
+df['feedback_len_chars'] = df['feedback_clean'].str.len()
+df['feedback_word_count'] = df['feedback_clean'].str.split().str.len().fillna(0).astype(int)
+
+# 9. Anonymize email (if present)
+if 'email' in df.columns:
+    df['email_hash'] = df['email'].fillna('').apply(lambda s: s[0] + "****" + s.split('@')[-1] if s else '')
+
+# 10. Save cleaned
+df.to_csv("feedback_cleaned.csv", index=False, encoding="utf-8")
+```
+
+**Advanced NLP steps (optional)**
+
+* Use `nltk` / `spaCy` for tokenization, stopword removal, lemmatization.
+* For sentiment, use `textblob`, `VADER` (good for short social-like comments), or a simple rule-based lexicon.
+
+---
+
+# Text preprocessing checklist for NLP (practical)
+
+* Convert to lowercase.
+* Remove URLs, emails, phone numbers, HTML tags.
+* Normalize or remove emojis (or keep them as tokens if you want sentiment info).
+* Remove repeated whitespace/newlines.
+* Optionally remove punctuation (or keep punctuation if helpful).
+* Tokenize → remove stopwords → lemmatize (preferred over stemming).
+* Keep a copy of raw text and the cleaned text (don’t overwrite raw).
+
+Python regex examples (examples shown in the script above) remove URLs / emails / phone numbers.
+
+---
+
+# Feature ideas to add (useful for analysis & dashboards)
+
+* `rating_num` (1–5)
+* `feedback_word_count`, `feedback_len_chars`
+* `feedback_sentiment_score` (VADER/TextBlob polarity)
+* `contains_mention_of_speaker` (keyword flags)
+* `event_canonical` (standardized event name)
+* `submitted_date`, `year`, `month`, `weekday`
+* `is_anonymous` (if email blank)
+* `priority_issue` (flag if feedback contains words like "sound", "food", "timing")
+
+---
+
+# Validation checks (do these before moving to analysis)
+
+* Ratings: `min(rating_num)` >= 1 and `max(rating_num)` <= 5.
+* Null counts: how many null feedbacks vs null ratings.
+* Distribution: Pivot by event → average rating and count.
+* Spot-check: sample 10 rows of feedback\_clean to ensure cleaning didn’t destroy meaning.
+* Save a data dictionary listing columns and meanings.
+
+---
+
+# Common pitfalls & how to fix
+
+* **Encoding issues** (weird characters): re-import with UTF-8.
+* **Extra header rows embedded**: filter them out (look for rows where Date = "Timestamp").
+* **Delimiters inside text**: ensure import uses proper quoting (most CSVs have quotes around free text). Use Data → From Text/CSV to handle quotes.
+* **#REF! on structured formulas**: convert to Table or use cell references.
+* **Dates parsed incorrectly**: use locale-aware parse or TEXT→Date functions.
+
+---
+
+# Privacy & compliance
+
+* Remove or hash emails/phone numbers if you’ll share outputs.
+* Keep raw responses secure — treat personally identifying feedback as sensitive.
+
+---
+
+If you want, I can:
+
+* Produce a ready-to-run **Python notebook** that implements the pandas workflow above and adds basic sentiment and a word cloud; or
+* Generate a **Power Query M script** you can paste into Power Query; or
+* Create an **Excel template** with formulas and mapping tables pre-built.
+
+Which would help you most? (I can generate the file right away.)
